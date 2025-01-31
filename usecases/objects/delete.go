@@ -17,11 +17,14 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/go-openapi/strfmt"
-	"github.com/weaviate/weaviate/entities/additional"
 	"github.com/weaviate/weaviate/entities/classcache"
+
+	"github.com/go-openapi/strfmt"
+
+	"github.com/weaviate/weaviate/entities/additional"
 	"github.com/weaviate/weaviate/entities/models"
 	"github.com/weaviate/weaviate/usecases/auth/authorization"
+	authzerrs "github.com/weaviate/weaviate/usecases/auth/authorization/errors"
 	"github.com/weaviate/weaviate/usecases/memwatch"
 )
 
@@ -37,10 +40,6 @@ func (m *Manager) DeleteObject(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	if err := m.authorizer.Authorize(principal, authorization.READ, authorization.ShardsMetadata(class, tenant)...); err != nil {
-		return err
-	}
-
 	ctx = classcache.ContextWithClassCache(ctx)
 
 	unlock, err := m.locks.LockConnector()
@@ -79,6 +78,10 @@ func (m *Manager) DeleteObject(ctx context.Context,
 		if errors.As(err, &e2) {
 			return NewErrMultiTenancy(fmt.Errorf("delete object from vector repo: %w", err))
 		}
+		var e3 authzerrs.Forbidden
+		if errors.As(err, &e3) {
+			return fmt.Errorf("delete object from vector repo: %w", err)
+		}
 		return NewErrInternal("could not delete object from vector repo: %v", err)
 	}
 
@@ -97,8 +100,7 @@ func (m *Manager) deleteObjectFromRepo(ctx context.Context, id strfmt.UUID, dele
 	for {
 		objectRes, err := m.getObjectFromRepo(ctx, "", id, additional.Properties{}, nil, "")
 		if err != nil {
-			_, ok := err.(ErrNotFound)
-			if ok {
+			if errors.As(err, &ErrNotFound{}) {
 				if deleteCounter == 0 {
 					return err
 				}

@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/concurrency"
 	enterrors "github.com/weaviate/weaviate/entities/errors"
 
 	"github.com/pkg/errors"
@@ -293,7 +294,7 @@ func (b *BM25Searcher) wand(
 		Count: len(allRequests),
 	}
 
-	topKHeap := terms.DoWand(limit, combinedTerms, averagePropLength, params.AdditionalExplanations)
+	topKHeap := lsmkv.DoWand(limit, combinedTerms, averagePropLength, params.AdditionalExplanations)
 
 	return b.getTopKObjects(topKHeap, params.AdditionalExplanations, allQueryTerms, additional)
 }
@@ -441,7 +442,7 @@ func (b *BM25Searcher) createTerm(N float64, filterDocIds helpers.AllowList, que
 	if filterDocIds != nil {
 		for _, docIDs := range filteredDocIDsThread {
 			if docIDs != nil {
-				filteredDocIDs.Or(docIDs)
+				filteredDocIDs.OrConc(docIDs, concurrency.SROAR_MERGE)
 			}
 		}
 	}

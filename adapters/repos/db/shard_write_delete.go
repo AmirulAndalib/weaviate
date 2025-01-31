@@ -201,6 +201,16 @@ func (s *Shard) cleanupInvertedIndexOnDelete(previous []byte, docID uint64) erro
 					return fmt.Errorf("track dimensions of '%s' (delete): %w", vecName, err)
 				}
 			}
+			var dims int
+			for vecName, vec := range previousObject.MultiVectors {
+				dims = 0
+				for _, v := range vec {
+					dims += len(v)
+				}
+				if err := s.removeDimensionsForVecLSM(len(vec), docID, vecName); err != nil {
+					return fmt.Errorf("track dimensions of '%s' (delete): %w", vecName, err)
+				}
+			}
 		} else {
 			if err = s.removeDimensionsLSM(len(previousObject.Vector), docID); err != nil {
 				return fmt.Errorf("track dimensions (delete): %w", err)
@@ -212,8 +222,8 @@ func (s *Shard) cleanupInvertedIndexOnDelete(previous []byte, docID uint64) erro
 }
 
 func (s *Shard) mayDeleteObjectHashTree(uuidBytes []byte, updateTime int64) error {
-	s.hashtreeRWMux.RLock()
-	defer s.hashtreeRWMux.RUnlock()
+	s.asyncReplicationRWMux.RLock()
+	defer s.asyncReplicationRWMux.RUnlock()
 
 	if s.hashtree == nil {
 		return nil

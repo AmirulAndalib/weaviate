@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+
 	"github.com/weaviate/weaviate/adapters/handlers/rest/operations/authz"
 	"github.com/weaviate/weaviate/entities/models"
 	"github.com/weaviate/weaviate/usecases/auth/authorization"
@@ -77,7 +78,7 @@ func TestCreateRoleSuccess(t *testing.T) {
 					Permissions: []*models.Permission{
 						{
 							Action: String(authorization.CreateCollections),
-							Collections: &models.PermissionCollections{
+							Tenants: &models.PermissionTenants{
 								Collection: String("ABC"),
 								Tenant:     String("Tenant1"),
 							},
@@ -95,7 +96,7 @@ func TestCreateRoleSuccess(t *testing.T) {
 					Permissions: []*models.Permission{
 						{
 							Action: String(authorization.CreateCollections),
-							Collections: &models.PermissionCollections{
+							Tenants: &models.PermissionTenants{
 								Tenant: String("Tenant1"),
 							},
 						},
@@ -184,6 +185,21 @@ func TestCreateRoleBadRequest(t *testing.T) {
 				},
 			},
 			expectedError: "role name is required",
+		},
+		{
+			name: "invalid role name",
+			params: authz.CreateRoleParams{
+				Body: &models.Role{
+					Name: String("something/wrong"),
+					Permissions: []*models.Permission{
+						{
+							Action:      String(authorization.CreateCollections),
+							Collections: &models.PermissionCollections{},
+						},
+					},
+				},
+			},
+			expectedError: "role name is invalid",
 		},
 		{
 			name: "invalid permission",
@@ -282,6 +298,9 @@ func TestCreateRoleForbidden(t *testing.T) {
 			logger, _ := test.NewNullLogger()
 
 			authorizer.On("Authorize", tt.principal, authorization.CREATE, authorization.Roles(*tt.params.Body.Name)[0]).Return(tt.authorizeErr)
+			if tt.authorizeErr != nil {
+				authorizer.On("Authorize", tt.principal, authorization.ROLE_SCOPE_MATCH, authorization.Roles(*tt.params.Body.Name)[0]).Return(tt.authorizeErr)
+			}
 
 			h := &authZHandlers{
 				authorizer: authorizer,

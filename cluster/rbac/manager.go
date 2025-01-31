@@ -15,10 +15,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/sirupsen/logrus"
+
 	cmd "github.com/weaviate/weaviate/cluster/proto/api"
 	"github.com/weaviate/weaviate/usecases/auth/authorization"
+	"github.com/weaviate/weaviate/usecases/auth/authorization/conv"
 )
 
 var ErrBadRequest = errors.New("bad request")
@@ -33,6 +36,10 @@ func NewManager(authZ authorization.Controller, logger logrus.FieldLogger) *Mana
 }
 
 func (m *Manager) GetRoles(req *cmd.QueryRequest) ([]byte, error) {
+	if m.authZ == nil {
+		payload, _ := json.Marshal(cmd.QueryGetRolesResponse{})
+		return payload, nil
+	}
 	subCommand := cmd.QueryGetRolesRequest{}
 	if err := json.Unmarshal(req.SubCommand, &subCommand); err != nil {
 		return []byte{}, fmt.Errorf("%w: %w", ErrBadRequest, err)
@@ -52,6 +59,10 @@ func (m *Manager) GetRoles(req *cmd.QueryRequest) ([]byte, error) {
 }
 
 func (m *Manager) GetRolesForUser(req *cmd.QueryRequest) ([]byte, error) {
+	if m.authZ == nil {
+		payload, _ := json.Marshal(cmd.QueryGetRolesForUserResponse{})
+		return payload, nil
+	}
 	subCommand := cmd.QueryGetRolesForUserRequest{}
 	if err := json.Unmarshal(req.SubCommand, &subCommand); err != nil {
 		return []byte{}, fmt.Errorf("%w: %w", ErrBadRequest, err)
@@ -71,6 +82,10 @@ func (m *Manager) GetRolesForUser(req *cmd.QueryRequest) ([]byte, error) {
 }
 
 func (m *Manager) GetUsersForRole(req *cmd.QueryRequest) ([]byte, error) {
+	if m.authZ == nil {
+		payload, _ := json.Marshal(cmd.QueryGetUsersForRoleResponse{})
+		return payload, nil
+	}
 	subCommand := cmd.QueryGetUsersForRoleRequest{}
 	if err := json.Unmarshal(req.SubCommand, &subCommand); err != nil {
 		return []byte{}, fmt.Errorf("%w: %w", ErrBadRequest, err)
@@ -90,6 +105,10 @@ func (m *Manager) GetUsersForRole(req *cmd.QueryRequest) ([]byte, error) {
 }
 
 func (m *Manager) HasPermission(req *cmd.QueryRequest) ([]byte, error) {
+	if m.authZ == nil {
+		payload, _ := json.Marshal(cmd.QueryHasPermissionResponse{})
+		return payload, nil
+	}
 	subCommand := cmd.QueryHasPermissionRequest{}
 	if err := json.Unmarshal(req.SubCommand, &subCommand); err != nil {
 		return []byte{}, fmt.Errorf("%w: %w", ErrBadRequest, err)
@@ -109,15 +128,76 @@ func (m *Manager) HasPermission(req *cmd.QueryRequest) ([]byte, error) {
 }
 
 func (m *Manager) UpsertRolesPermissions(c *cmd.ApplyRequest) error {
+	if m.authZ == nil {
+		return nil
+	}
 	req := &cmd.CreateRolesRequest{}
 	if err := json.Unmarshal(c.SubCommand, req); err != nil {
 		return fmt.Errorf("%w: %w", ErrBadRequest, err)
+	}
+	switch req.Version {
+	case cmd.RBACCommandPolicyVersionV0:
+		for roleName, policies := range req.Roles {
+			permissions := []*authorization.Policy{}
+			for _, p := range policies {
+				permissions = append(permissions, &p)
+			}
+			// remove old permissions
+			if err := m.authZ.RemovePermissions(roleName, permissions); err != nil {
+				return err
+			}
+
+			// create new permissions
+			for idx := range policies {
+				if req.Roles[roleName][idx].Domain == authorization.SchemaDomain {
+					parts := strings.Split(req.Roles[roleName][idx].Resource, "/")
+					if len(parts) < 3 {
+						// shall never happens
+						return fmt.Errorf("invalid schema path")
+					}
+					req.Roles[roleName][idx].Resource = authorization.CollectionsMetadata(parts[2])[0]
+				}
+
+				if req.Roles[roleName][idx].Domain == authorization.RolesDomain &&
+					req.Roles[roleName][idx].Verb == conv.CRUD {
+					// this will override any role was created before 1.28
+					// to reset default to
+					req.Roles[roleName][idx].Verb = authorization.ROLE_SCOPE_MATCH
+				}
+			}
+		}
+	case cmd.RBACCommandPolicyVersionV1:
+		for roleName, policies := range req.Roles {
+			permissions := []*authorization.Policy{}
+			for _, p := range policies {
+				permissions = append(permissions, &p)
+			}
+			// remove old permissions
+			if err := m.authZ.RemovePermissions(roleName, permissions); err != nil {
+				return err
+			}
+
+			// create new permissions
+			for idx := range policies {
+				if req.Roles[roleName][idx].Domain == authorization.RolesDomain &&
+					req.Roles[roleName][idx].Verb == conv.CRUD {
+					// this will override any role was created before 1.28
+					// to reset default to
+					req.Roles[roleName][idx].Verb = authorization.ROLE_SCOPE_MATCH
+				}
+			}
+		}
+	default:
+		// do nothing
 	}
 
 	return m.authZ.UpsertRolesPermissions(req.Roles)
 }
 
 func (m *Manager) DeleteRoles(c *cmd.ApplyRequest) error {
+	if m.authZ == nil {
+		return nil
+	}
 	req := &cmd.DeleteRolesRequest{}
 	if err := json.Unmarshal(c.SubCommand, req); err != nil {
 		return fmt.Errorf("%w: %w", ErrBadRequest, err)
@@ -127,6 +207,9 @@ func (m *Manager) DeleteRoles(c *cmd.ApplyRequest) error {
 }
 
 func (m *Manager) AddRolesForUser(c *cmd.ApplyRequest) error {
+	if m.authZ == nil {
+		return nil
+	}
 	req := &cmd.AddRolesForUsersRequest{}
 	if err := json.Unmarshal(c.SubCommand, req); err != nil {
 		return fmt.Errorf("%w: %w", ErrBadRequest, err)
@@ -136,15 +219,43 @@ func (m *Manager) AddRolesForUser(c *cmd.ApplyRequest) error {
 }
 
 func (m *Manager) RemovePermissions(c *cmd.ApplyRequest) error {
+	if m.authZ == nil {
+		return nil
+	}
 	req := &cmd.RemovePermissionsRequest{}
 	if err := json.Unmarshal(c.SubCommand, req); err != nil {
 		return fmt.Errorf("%w: %w", ErrBadRequest, err)
+	}
+
+	switch req.Version {
+	case cmd.RBACCommandPolicyVersionV0:
+		// keep to remove old formats
+		if err := m.authZ.RemovePermissions(req.Role, req.Permissions); err != nil {
+			return err
+		}
+		// remove any added with new format after migration
+		for idx := range req.Permissions {
+			if req.Permissions[idx].Domain != authorization.SchemaDomain {
+				continue
+			}
+			parts := strings.Split(req.Permissions[idx].Resource, "/")
+			if len(parts) < 3 {
+				// shall never happens
+				return fmt.Errorf("invalid schema path")
+			}
+			req.Permissions[idx].Resource = authorization.CollectionsMetadata(parts[2])[0]
+		}
+	default:
+		// do nothing
 	}
 
 	return m.authZ.RemovePermissions(req.Role, req.Permissions)
 }
 
 func (m *Manager) RevokeRolesForUser(c *cmd.ApplyRequest) error {
+	if m.authZ == nil {
+		return nil
+	}
 	req := &cmd.RevokeRolesForUserRequest{}
 	if err := json.Unmarshal(c.SubCommand, req); err != nil {
 		return fmt.Errorf("%w: %w", ErrBadRequest, err)

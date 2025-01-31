@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
 	"github.com/weaviate/weaviate/entities/models"
 	"github.com/weaviate/weaviate/test/helper"
 )
@@ -32,8 +33,8 @@ func TestCollectEndpoints(t *testing.T) {
 }
 
 func TestAuthzAllEndpointsNoPermissionDynamically(t *testing.T) {
-	adminKey := "admin-Key"
-	adminUser := "admin-User"
+	adminKey := "admin-key"
+	adminUser := "admin-user"
 	customKey := "custom-key"
 	customUser := "custom-user"
 
@@ -69,6 +70,7 @@ func TestAuthzAllEndpointsNoPermissionDynamically(t *testing.T) {
 		"/backups/{backend}",     // we ignore backup because there is multiple endpoints doesn't need authZ and many validations
 		"/backups/{backend}/{id}",
 		"/backups/{backend}/{id}/restore",
+		"/classifications/{id}", // requires to get classification by id first before checking of authz permissions
 	}
 
 	for _, endpoint := range endpoints {
@@ -78,7 +80,7 @@ func TestAuthzAllEndpointsNoPermissionDynamically(t *testing.T) {
 		url = strings.ReplaceAll(url, "{className}", className)
 		url = strings.ReplaceAll(url, "{tenantName}", "Tenant1")
 		url = strings.ReplaceAll(url, "{shardName}", "Shard1")
-		url = strings.ReplaceAll(url, "{id}", "admin-User")
+		url = strings.ReplaceAll(url, "{id}", "admin-user")
 		url = strings.ReplaceAll(url, "{backend}", "filesystem")
 		url = strings.ReplaceAll(url, "{propertyName}", "someProperty")
 

@@ -155,12 +155,12 @@ func (s *Shard) ObjectDigestsByTokenRange(ctx context.Context,
 	for k, v := cursor.Seek(initialTokenBytes[:]); n < limit && k != nil && bytes.Compare(k, finalTokenBytes[:]) < 1; k, v = cursor.Next() {
 		obj, err := storobj.FromBinary(v)
 		if err != nil {
-			return objs, lastTokenRead, fmt.Errorf("cannot unmarshal object: %v", err)
+			return objs, lastTokenRead, fmt.Errorf("cannot unmarshal object: %w", err)
 		}
 
 		uuidBytes, err := uuid.MustParse(obj.ID().String()).MarshalBinary()
 		if err != nil {
-			return objs, lastTokenRead, fmt.Errorf("cannot unmarshal object: %v", err)
+			return objs, lastTokenRead, fmt.Errorf("cannot unmarshal object: %w", err)
 		}
 
 		replicaObj := replica.RepairResponse{
@@ -332,6 +332,7 @@ func (s *Shard) ObjectSearch(ctx context.Context, limit int, filters *filters.Lo
 			}
 
 			filterDocIds = objs
+			defer objs.Close()
 		}
 
 		className := s.index.Config.ClassName
@@ -472,6 +473,10 @@ func (s *Shard) ObjectVectorSearch(ctx context.Context, searchVectors []models.V
 			dists []float32
 		)
 		eg.Go(func() error {
+			if allowList != nil {
+				defer allowList.Close()
+			}
+
 			vidx, err := s.getVectorIndex(targetVector)
 			if err != nil {
 				return err

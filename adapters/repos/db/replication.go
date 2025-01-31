@@ -22,6 +22,7 @@ import (
 
 	"github.com/go-openapi/strfmt"
 	"github.com/pkg/errors"
+
 	"github.com/weaviate/weaviate/entities/additional"
 	"github.com/weaviate/weaviate/entities/dto"
 	enterrors "github.com/weaviate/weaviate/entities/errors"
@@ -344,7 +345,7 @@ func (s *Shard) filePutter(ctx context.Context,
 func (idx *Index) OverwriteObjects(ctx context.Context,
 	shard string, updates []*objects.VObject,
 ) ([]replica.RepairResponse, error) {
-	s, release, err := idx.getOrInitShard(ctx, shard)
+	s, release, err := idx.GetShard(ctx, shard)
 	if err != nil {
 		return nil, fmt.Errorf("shard %q not found locally", shard)
 	}
@@ -376,8 +377,8 @@ func (idx *Index) OverwriteObjects(ctx context.Context,
 			currUpdateTime = localObj.LastUpdateTimeUnix()
 		} else if errors.Is(err, lsmkv.Deleted) {
 			locallyDeleted = true
-			errDeleted, ok := err.(lsmkv.ErrDeleted)
-			if ok {
+			var errDeleted lsmkv.ErrDeleted
+			if errors.As(err, &errDeleted) {
 				currUpdateTime = errDeleted.DeletionTime().UnixMilli()
 			} // otherwise an unknown deletion time
 		} else if !errors.Is(err, lsmkv.NotFound) {
@@ -538,7 +539,7 @@ func (i *Index) IncomingDigestObjects(ctx context.Context,
 func (i *Index) DigestObjectsInTokenRange(ctx context.Context,
 	shardName string, initialToken, finalToken uint64, limit int,
 ) (result []replica.RepairResponse, lastTokenRead uint64, err error) {
-	shard, release, err := i.getOrInitShard(ctx, shardName)
+	shard, release, err := i.GetShard(ctx, shardName)
 	if err != nil {
 		return nil, 0, fmt.Errorf("shard %q does not exist locally", shardName)
 	}
@@ -623,7 +624,7 @@ func (i *Index) FetchObject(ctx context.Context,
 func (i *Index) FetchObjects(ctx context.Context,
 	shardName string, ids []strfmt.UUID,
 ) ([]objects.Replica, error) {
-	shard, release, err := i.getOrInitShard(ctx, shardName)
+	shard, release, err := i.GetShard(ctx, shardName)
 	if err != nil {
 		return nil, fmt.Errorf("shard %q does not exist locally", shardName)
 	}

@@ -20,6 +20,7 @@ import (
 
 	"github.com/go-openapi/strfmt"
 	"github.com/stretchr/testify/assert"
+
 	"github.com/weaviate/weaviate/client/batch"
 	"github.com/weaviate/weaviate/client/meta"
 	"github.com/weaviate/weaviate/client/objects"
@@ -101,8 +102,7 @@ func CreateObject(t *testing.T, object *models.Object) error {
 func CreateObjectAuth(t *testing.T, object *models.Object, key string) error {
 	t.Helper()
 	params := objects.NewObjectsCreateParams().WithBody(object)
-	resp, err := Client(t).Objects.ObjectsCreate(params, CreateAuth(key))
-	AssertRequestOk(t, resp, err, nil)
+	_, err := Client(t).Objects.ObjectsCreate(params, CreateAuth(key))
 	return err
 }
 
@@ -340,6 +340,13 @@ func UpdateTenants(t *testing.T, class string, tenants []*models.Tenant) {
 	AssertRequestOk(t, resp, err, nil)
 }
 
+func UpdateTenantsWithAuthz(t *testing.T, class string, tenants []*models.Tenant, authInfo runtime.ClientAuthInfoWriter) {
+	t.Helper()
+	params := schema.NewTenantsUpdateParams().WithClassName(class).WithBody(tenants)
+	resp, err := Client(t).Schema.TenantsUpdate(params, authInfo)
+	AssertRequestOk(t, resp, err, nil)
+}
+
 func CreateTenantsReturnError(t *testing.T, class string, tenants []*models.Tenant) error {
 	t.Helper()
 	params := schema.NewTenantsCreateParams().WithClassName(class).WithBody(tenants)
@@ -382,6 +389,13 @@ func TenantExists(t *testing.T, class string, tenant string) (*schema.TenantExis
 func DeleteTenants(t *testing.T, class string, tenants []string) error {
 	t.Helper()
 	params := schema.NewTenantsDeleteParams().WithClassName(class).WithTenants(tenants)
+	_, err := Client(t).Schema.TenantsDelete(params, nil)
+	return err
+}
+
+func DeleteTenantsWithContext(t *testing.T, ctx context.Context, class string, tenants []string) error {
+	t.Helper()
+	params := schema.NewTenantsDeleteParams().WithContext(ctx).WithClassName(class).WithTenants(tenants)
 	_, err := Client(t).Schema.TenantsDelete(params, nil)
 	return err
 }

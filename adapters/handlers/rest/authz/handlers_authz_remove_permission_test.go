@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+
 	"github.com/weaviate/weaviate/adapters/handlers/rest/operations/authz"
 	"github.com/weaviate/weaviate/entities/models"
 	"github.com/weaviate/weaviate/usecases/auth/authorization"
@@ -172,6 +173,10 @@ func TestRemovePermissionsForbidden(t *testing.T) {
 			logger, _ := test.NewNullLogger()
 
 			authorizer.On("Authorize", tt.principal, authorization.UPDATE, authorization.Roles(tt.params.ID)[0]).Return(tt.authorizeErr)
+			if tt.authorizeErr != nil {
+				// 2nd Call if update failed
+				authorizer.On("Authorize", tt.principal, authorization.ROLE_SCOPE_MATCH, authorization.Roles(tt.params.ID)[0]).Return(tt.authorizeErr)
+			}
 
 			h := &authZHandlers{
 				authorizer: authorizer,
@@ -205,8 +210,10 @@ func TestRemovePermissionsRoleNotFound(t *testing.T) {
 				Body: authz.RemovePermissionsBody{
 					Permissions: []*models.Permission{
 						{
-							Action:      String(authorization.CreateCollections),
-							Collections: &models.PermissionCollections{},
+							Action: String(authorization.CreateCollections),
+							Collections: &models.PermissionCollections{
+								Collection: String("*"),
+							},
 						},
 					},
 				},

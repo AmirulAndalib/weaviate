@@ -28,6 +28,7 @@ import (
 
 	"github.com/go-openapi/strfmt"
 	"github.com/pkg/errors"
+
 	"github.com/weaviate/weaviate/entities/additional"
 	"github.com/weaviate/weaviate/entities/aggregation"
 	"github.com/weaviate/weaviate/entities/filters"
@@ -213,7 +214,7 @@ func (p objectListPayload) Unmarshal(in []byte) ([]*storobj.Object, error) {
 
 	for {
 		_, err := r.Read(reusableLengthBuf)
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -291,7 +292,7 @@ func (p versionedObjectListPayload) Unmarshal(in []byte) ([]*objects.VObject, er
 
 	for {
 		_, err := r.Read(reusableLengthBuf)
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -523,11 +524,10 @@ func (p searchParamsPayload) Marshal(vectors []models.Vector, targetVectors []st
 	var targetVector string
 	// BC with pre 1.26
 	if len(vectors) == 1 {
+		// we only add a vector here only if it's []float32 vector to be backward compatible with pre v1.26 versions
 		if v, ok := vectors[0].([]float32); ok {
 			vector = v
 			targetVector = targetVectors[0]
-		} else {
-			return nil, fmt.Errorf("vector should be of []float32 type but is %T", vectors[0])
 		}
 	}
 
