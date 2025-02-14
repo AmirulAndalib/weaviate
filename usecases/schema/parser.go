@@ -172,8 +172,7 @@ func (p *Parser) parseShardingConfig(class *models.Class) (err error) {
 	// multiTenancyConfig and shardingConfig are mutually exclusive
 	cfg := shardingConfig.Config{} // cfg is empty in case of MT
 	if !schema.MultiTenancyEnabled(class) {
-		cfg, err = shardingConfig.ParseConfig(class.ShardingConfig,
-			p.clusterState.NodeCount())
+		cfg, err = shardingConfig.ParseConfig(class.ShardingConfig, p.clusterState.NodeCount())
 		if err != nil {
 			return err
 		}
@@ -212,6 +211,12 @@ func (p *Parser) parseGivenVectorIndexConfig(vectorIndexType string,
 	if vectorIndexType != vectorindex.VectorIndexTypeHNSW && vectorIndexType != vectorindex.VectorIndexTypeFLAT && vectorIndexType != vectorindex.VectorIndexTypeDYNAMIC {
 		return nil, errors.Errorf(
 			"parse vector index config: unsupported vector index type: %q",
+			vectorIndexType)
+	}
+
+	if vectorIndexType != vectorindex.VectorIndexTypeHNSW && isMultiVector {
+		return nil, errors.Errorf(
+			"parse vector index config: multi vector index is not supported for vector index type: %q, only supported type is hnsw",
 			vectorIndexType)
 	}
 

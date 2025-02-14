@@ -239,6 +239,38 @@ func TestStorageObjectUnMarshallingMultiVector(t *testing.T) {
 			assert.ElementsMatch(t, after.MultiVectors["vector4"], before.MultiVectors["vector4"])
 			assert.ElementsMatch(t, after.MultiVectors["vector5"], before.MultiVectors["vector5"])
 		})
+
+		t.Run("check multi vectors optional", func(t *testing.T) {
+			t.Run("FromBinaryOptional: empty additional", func(t *testing.T) {
+				afterMultiVectorsOptional, err := FromBinaryOptional(asBinary, additional.Properties{}, nil)
+				require.Nil(t, err)
+				require.Nil(t, afterMultiVectorsOptional.MultiVectors)
+			})
+
+			t.Run("FromBinaryOptional: multi vector in additional", func(t *testing.T) {
+				afterMultiVectorsOptional, err := FromBinaryOptional(asBinary, additional.Properties{
+					Vectors: []string{"vector4"},
+				}, nil)
+				require.Nil(t, err)
+				require.NotEmpty(t, afterMultiVectorsOptional.MultiVectors)
+				require.Len(t, afterMultiVectorsOptional.MultiVectors, 1)
+				require.Equal(t, before.MultiVectors["vector4"], afterMultiVectorsOptional.MultiVectors["vector4"])
+			})
+
+			t.Run("FromBinaryOptional: named vector and multi vector in additional", func(t *testing.T) {
+				afterMultiVectorsOptional, err := FromBinaryOptional(asBinary, additional.Properties{
+					Vectors: []string{"vector2", "vector4"},
+				}, nil)
+				require.Nil(t, err)
+				require.NotEmpty(t, afterMultiVectorsOptional.Vectors)
+				require.NotEmpty(t, afterMultiVectorsOptional.MultiVectors)
+				require.Len(t, afterMultiVectorsOptional.Vectors, 2)
+				require.Len(t, afterMultiVectorsOptional.MultiVectors, 1)
+				require.Equal(t, before.Vectors["vector1"], afterMultiVectorsOptional.Vectors["vector1"])
+				require.Equal(t, before.Vectors["vector2"], afterMultiVectorsOptional.Vectors["vector2"])
+				require.Equal(t, before.MultiVectors["vector4"], afterMultiVectorsOptional.MultiVectors["vector4"])
+			})
+		})
 	})
 
 	t.Run("only vectors and multivectors", func(t *testing.T) {
@@ -682,10 +714,8 @@ func TestExtractionOfSingleProperties(t *testing.T) {
 	byteObject, err := before.MarshalBinary()
 	require.Nil(t, err)
 
-	var propertyNames []string
 	var propStrings [][]string
 	for key := range properties {
-		propertyNames = append(propertyNames, key)
 		propStrings = append(propStrings, []string{key})
 	}
 
@@ -693,7 +723,7 @@ func TestExtractionOfSingleProperties(t *testing.T) {
 
 	// test with reused property map
 	for i := 0; i < 2; i++ {
-		require.Nil(t, UnmarshalPropertiesFromObject(byteObject, &extractedProperties, propertyNames, propStrings))
+		require.Nil(t, UnmarshalPropertiesFromObject(byteObject, extractedProperties, propStrings))
 		for key := range expected {
 			require.Equal(t, expected[key], extractedProperties[key])
 		}
@@ -905,6 +935,7 @@ func TestStorageMaxVectorDimensionsObjectMarshalling(t *testing.T) {
 					before.Object.Additional = nil
 					before.Vector = vector
 					before.VectorLen = int(vectorLength)
+
 					assert.Equal(t, before, after)
 
 					assert.Equal(t, before.DocID, after.DocID)
@@ -917,7 +948,7 @@ func TestStorageMaxVectorDimensionsObjectMarshalling(t *testing.T) {
 
 				t.Run("with explicit properties", func(t *testing.T) {
 					after, err := FromBinaryOptional(asBinary, additional.Properties{},
-						&PropertyExtraction{PropStrings: []string{"name"}, PropStringsList: [][]string{{"name"}}},
+						&PropertyExtraction{PropertyPaths: [][]string{{"name"}}},
 					)
 					require.Nil(t, err)
 
@@ -931,7 +962,7 @@ func TestStorageMaxVectorDimensionsObjectMarshalling(t *testing.T) {
 						NoProps:      true,
 						ModuleParams: map[string]interface{}{"foo": "bar"}, // this causes the property extraction code to run
 					},
-						&PropertyExtraction{PropStrings: nil, PropStringsList: nil},
+						&PropertyExtraction{PropertyPaths: nil},
 					)
 					require.Nil(t, err)
 
@@ -1219,12 +1250,9 @@ func TestMemoryReuse(t *testing.T) {
 			Properties: beforeProp,
 		}
 
-		propStrings := make([]string, 0, len(beforeProp))
-		propStringsList := make([][]string, 0, len(beforeProp))
-
+		propertyPaths := make([][]string, 0, len(beforeProp))
 		for j := range beforeProp {
-			propStrings = append(propStrings, j)
-			propStringsList = append(propStringsList, []string{j})
+			propertyPaths = append(propertyPaths, []string{j})
 		}
 
 		before := FromObject(&obj, nil, nil, nil)
@@ -1234,7 +1262,7 @@ func TestMemoryReuse(t *testing.T) {
 		copy(reuseableBuff, asBinary)
 
 		afterProp := map[string]interface{}{}
-		require.Nil(t, UnmarshalProperties(reuseableBuff, &afterProp, propStrings, propStringsList))
+		require.Nil(t, UnmarshalProperties(reuseableBuff, afterProp, propertyPaths))
 		afterProps = append(afterProps, afterProp)
 	}
 
@@ -1278,14 +1306,13 @@ func benchmarkExtraction(b *testing.B, propStrings []string) {
 	var props *PropertyExtraction
 
 	if len(propStrings) > 0 {
-		propStringsList := make([][]string, len(propStrings))
+		propertyPaths := make([][]string, len(propStrings))
 		for i, prop := range propStrings {
-			propStringsList[i] = []string{prop}
+			propertyPaths[i] = []string{prop}
 		}
 
 		props = &PropertyExtraction{
-			PropStrings:     propStrings,
-			PropStringsList: propStringsList,
+			PropertyPaths: propertyPaths,
 		}
 	}
 

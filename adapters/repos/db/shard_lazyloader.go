@@ -269,11 +269,11 @@ func (l *LazyLoadShard) UpdateVectorIndexConfigs(ctx context.Context, updated ma
 	return l.shard.UpdateVectorIndexConfigs(ctx, updated)
 }
 
-func (l *LazyLoadShard) UpdateAsyncReplication(ctx context.Context, enabled bool) error {
+func (l *LazyLoadShard) updateAsyncReplicationConfig(ctx context.Context, enabled bool) error {
 	if err := l.Load(ctx); err != nil {
 		return err
 	}
-	return l.shard.UpdateAsyncReplication(ctx, enabled)
+	return l.shard.updateAsyncReplicationConfig(ctx, enabled)
 }
 
 func (l *LazyLoadShard) AddReferencesBatch(ctx context.Context, refs objects.BatchReferences) []error {
@@ -302,13 +302,14 @@ func (l *LazyLoadShard) MultiObjectByID(ctx context.Context, query []multi.Ident
 	return l.shard.MultiObjectByID(ctx, query)
 }
 
-func (l *LazyLoadShard) ObjectDigestsByTokenRange(ctx context.Context,
-	initialToken, finalToken uint64, limit int,
-) (objs []replica.RepairResponse, lastTokenRead uint64, err error) {
-	if err := l.Load(ctx); err != nil {
-		return nil, 0, err
+func (l *LazyLoadShard) ObjectDigestsInRange(ctx context.Context,
+	initialUUID, finalUUID strfmt.UUID, limit int,
+) (objs []replica.RepairResponse, err error) {
+	if !l.isLoaded() {
+		return nil, err
 	}
-	return l.shard.ObjectDigestsByTokenRange(ctx, initialToken, finalToken, limit)
+
+	return l.shard.ObjectDigestsInRange(ctx, initialUUID, finalUUID, limit)
 }
 
 func (l *LazyLoadShard) ID() string {
@@ -368,11 +369,11 @@ func (l *LazyLoadShard) initPropertyBuckets(ctx context.Context, eg *enterrors.E
 	l.shard.initPropertyBuckets(ctx, eg, props...)
 }
 
-func (l *LazyLoadShard) HaltForTransfer(ctx context.Context) error {
+func (l *LazyLoadShard) HaltForTransfer(ctx context.Context, offloading bool) error {
 	if err := l.Load(ctx); err != nil {
 		return err
 	}
-	return l.shard.HaltForTransfer(ctx)
+	return l.shard.HaltForTransfer(ctx, offloading)
 }
 
 func (l *LazyLoadShard) ListBackupFiles(ctx context.Context, ret *backup.ShardDescriptor) error {
@@ -412,6 +413,11 @@ func (l *LazyLoadShard) QuantizedDimensions(ctx context.Context, segments int) i
 func (l *LazyLoadShard) publishDimensionMetrics(ctx context.Context) {
 	l.mustLoad()
 	l.shard.publishDimensionMetrics(ctx)
+}
+
+func (l *LazyLoadShard) resetDimensionsLSM() error {
+	l.mustLoad()
+	return l.shard.resetDimensionsLSM()
 }
 
 func (l *LazyLoadShard) Aggregate(ctx context.Context, params aggregation.Params, modules *modules.Provider) (*aggregation.Result, error) {

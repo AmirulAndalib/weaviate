@@ -126,10 +126,10 @@ type hnsw struct {
 	id       string
 	rootPath string
 
-	logger            logrus.FieldLogger
-	distancerProvider distancer.Provider
-
-	pools *pools
+	logger                 logrus.FieldLogger
+	distancerProvider      distancer.Provider
+	multiDistancerProvider distancer.Provider
+	pools                  *pools
 
 	forbidFlat bool // mostly used in testing scenarios where we want to use the index even in scenarios where we typically wouldn't
 
@@ -314,17 +314,15 @@ func New(cfg Config, uc ent.UserConfig,
 
 	index.multivector.Store(uc.Multivector.Enabled)
 
+	if uc.Multivector.Enabled && (uc.PQ.Enabled || uc.SQ.Enabled || uc.BQ.Enabled) {
+		return nil, errors.New("compression is not supported in multivector mode")
+	}
+
 	if uc.BQ.Enabled {
 		var err error
-		if !uc.Multivector.Enabled {
-			index.compressor, err = compressionhelpers.NewBQCompressor(
-				index.distancerProvider, uc.VectorCacheMaxObjects, cfg.Logger, store,
-				cfg.AllocChecker)
-		} else {
-			index.compressor, err = compressionhelpers.NewBQMultiCompressor(
-				index.distancerProvider, uc.VectorCacheMaxObjects, cfg.Logger, store,
-				cfg.AllocChecker)
-		}
+		index.compressor, err = compressionhelpers.NewBQCompressor(
+			index.distancerProvider, uc.VectorCacheMaxObjects, cfg.Logger, store,
+			cfg.AllocChecker)
 		if err != nil {
 			return nil, err
 		}
@@ -334,13 +332,13 @@ func New(cfg Config, uc ent.UserConfig,
 	}
 
 	if uc.Multivector.Enabled {
+		index.multiDistancerProvider = distancer.NewDotProductProvider()
 		err := index.store.CreateOrLoadBucket(context.Background(), cfg.ID+"_mv_mappings", lsmkv.WithStrategy(lsmkv.StrategyReplace))
 		if err != nil {
 			return nil, errors.Wrapf(err, "Create or load bucket (multivector store)")
 		}
 	}
 
-	cfg.MakeCommitLoggerThunk()
 	if err := index.init(cfg); err != nil {
 		return nil, errors.Wrapf(err, "init index %q", index.id)
 	}
@@ -685,17 +683,32 @@ func (h *hnsw) DistanceBetweenVectors(x, y []float32) (float32, error) {
 	return h.distancerProvider.SingleDist(x, y)
 }
 
-func (h *hnsw) ContainsNode(id uint64) bool {
+func (h *hnsw) ContainsDoc(docID uint64) bool {
+	if h.Multivector() {
+		h.RLock()
+		vecIds, exists := h.docIDVectors[docID]
+		h.RUnlock()
+		return exists && !h.hasTombstones(vecIds)
+	}
+
 	h.RLock()
-	h.shardedNodeLocks.RLock(id)
-	exists := len(h.nodes) > int(id) && h.nodes[id] != nil
-	h.shardedNodeLocks.RUnlock(id)
+	h.shardedNodeLocks.RLock(docID)
+	exists := len(h.nodes) > int(docID) && h.nodes[docID] != nil
+	h.shardedNodeLocks.RUnlock(docID)
 	h.RUnlock()
 
-	return exists && !h.hasTombstone(id)
+	return exists && !h.hasTombstone(docID)
 }
 
-func (h *hnsw) Iterate(fn func(id uint64) bool) {
+func (h *hnsw) Iterate(fn func(docID uint64) bool) {
+	if h.Multivector() {
+		h.iterateMulti(fn)
+		return
+	}
+	h.iterate(fn)
+}
+
+func (h *hnsw) iterate(fn func(docID uint64) bool) {
 	var id uint64
 
 	for {
@@ -724,6 +737,31 @@ func (h *hnsw) Iterate(fn func(id uint64) bool) {
 		}
 
 		id++
+	}
+}
+
+func (h *hnsw) iterateMulti(fn func(docID uint64) bool) {
+	h.RLock()
+	indexedDocIDs := make([]uint64, 0, len(h.docIDVectors))
+	for docID := range h.docIDVectors {
+		indexedDocIDs = append(indexedDocIDs, docID)
+	}
+	h.RUnlock()
+
+	for _, docID := range indexedDocIDs {
+		if h.shutdownCtx.Err() != nil || h.resetCtx.Err() != nil {
+			return
+		}
+
+		h.RLock()
+		nodes, ok := h.docIDVectors[docID]
+		h.RUnlock()
+
+		if ok && !h.hasTombstones(nodes) {
+			if !fn(docID) {
+				return
+			}
+		}
 	}
 }
 

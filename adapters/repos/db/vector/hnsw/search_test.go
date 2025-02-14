@@ -169,7 +169,7 @@ func TestQueryMultiVectorDistancer(t *testing.T) {
 	require.NotNil(t, dist)
 	distance, err := dist.DistanceToNode(0)
 	require.Nil(t, err)
-	require.Equal(t, float32(1.2), distance)
+	require.Equal(t, float32(-1.2), distance)
 
 	// get distance for non-existing node
 	_, err = dist.DistanceToNode(1032)
@@ -210,23 +210,20 @@ func TestAcornPercentage(t *testing.T) {
 	t.Run("check acorn params on different filter percentags", func(t *testing.T) {
 		vectorIndex.acornSearch.Store(false)
 		allowList := helpers.NewAllowList(1, 2, 3)
-		useAcorn, M := vectorIndex.acornParams(allowList)
+		useAcorn := vectorIndex.acornEnabled(allowList)
 		assert.False(t, useAcorn)
-		assert.Equal(t, 0, M)
 
 		vectorIndex.acornSearch.Store(true)
 
-		useAcorn, M = vectorIndex.acornParams(allowList)
+		useAcorn = vectorIndex.acornEnabled(allowList)
 		assert.True(t, useAcorn)
-		assert.Equal(t, 3, M)
 
 		vectorIndex.acornSearch.Store(true)
 
 		largerAllowList := helpers.NewAllowList(1, 2, 3, 4, 5)
-		useAcorn, M = vectorIndex.acornParams(largerAllowList)
+		useAcorn = vectorIndex.acornEnabled(largerAllowList)
 		// should be false as allow list percentage is 50%
 		assert.False(t, useAcorn)
-		assert.Equal(t, 2, M)
 	})
 }
 

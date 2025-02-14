@@ -16,13 +16,12 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"os"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
-	"github.com/spaolacci/murmur3"
 	"github.com/weaviate/weaviate/adapters/repos/db/helpers"
 	"github.com/weaviate/weaviate/adapters/repos/db/inverted"
 	"github.com/weaviate/weaviate/adapters/repos/db/lsmkv"
@@ -326,8 +325,8 @@ func (s *Shard) putObjectLSM(obj *storobj.Object, idBytes []byte,
 }
 
 func (s *Shard) mayUpsertObjectHashTree(object *storobj.Object, uuidBytes []byte, status objectInsertStatus) error {
-	s.hashtreeRWMux.RLock()
-	defer s.hashtreeRWMux.RUnlock()
+	s.asyncReplicationRWMux.RLock()
+	defer s.asyncReplicationRWMux.RUnlock()
 
 	if s.hashtree == nil {
 		return nil
@@ -345,26 +344,31 @@ func (s *Shard) upsertObjectHashTree(object *storobj.Object, uuidBytes []byte, s
 		return fmt.Errorf("invalid object last update time")
 	}
 
-	h := murmur3.New64()
-	h.Write(uuidBytes)
-	token := h.Sum64()
+	leaf := s.hashtreeLeafFor(uuidBytes)
 
 	var objectDigest [16 + 8]byte
-
 	copy(objectDigest[:], uuidBytes)
 
 	if status.oldUpdateTime > 0 {
 		// Given only latest object version is maintained, previous registration is erased
 		binary.BigEndian.PutUint64(objectDigest[16:], uint64(status.oldUpdateTime))
-		s.hashtree.AggregateLeafWith(token, objectDigest[:])
+		s.hashtree.AggregateLeafWith(leaf, objectDigest[:])
 	}
 
 	binary.BigEndian.PutUint64(objectDigest[16:], uint64(object.Object.LastUpdateTimeUnix))
-	s.hashtree.AggregateLeafWith(token, objectDigest[:])
-
-	s.objectPropagationRequired()
+	s.hashtree.AggregateLeafWith(leaf, objectDigest[:])
 
 	return nil
+}
+
+func (s *Shard) hashtreeLeafFor(uuidBytes []byte) uint64 {
+	hashtreeHeight := s.asyncReplicationConfig.hashtreeHeight
+
+	if hashtreeHeight == 0 {
+		return 0
+	}
+
+	return binary.BigEndian.Uint64(uuidBytes[:8]) >> (64 - hashtreeHeight)
 }
 
 type objectInsertStatus struct {
@@ -461,18 +465,8 @@ func (s *Shard) upsertObjectDataLSM(bucket *lsmkv.Bucket, id []byte, data []byte
 	}
 	docIDBytes := keyBuf.Bytes()
 
-	h := murmur3.New64()
-	h.Write(id)
-	token := h.Sum64()
-
-	var tokenBytes [8 + 16]byte
-	// Important: token is suffixed with object uuid because only unique secondary indexes are supported
-	binary.BigEndian.PutUint64(tokenBytes[:], token)
-	copy(tokenBytes[8:], id)
-
 	return bucket.Put(id, data,
 		lsmkv.WithSecondaryKey(helpers.ObjectsBucketLSMDocIDSecondaryIndex, docIDBytes),
-		lsmkv.WithSecondaryKey(helpers.ObjectsBucketLSMTokenRangeSecondaryIndex, tokenBytes[:]),
 	)
 }
 
@@ -512,7 +506,18 @@ func (s *Shard) updateInvertedIndexLSM(object *storobj.Object,
 
 	// determine only changed properties to avoid unnecessary updates of inverted indexes
 	if status.docIDPreserved {
-		delta := inverted.Delta(prevProps, props)
+		skipDeltaForProps := []string{}
+		// TODO:aliszka	optimize fetching skipDeltaForProps
+		if bucketsInverted := s.store.GetBucketsByStrategy(lsmkv.StrategyInverted); len(bucketsInverted) > 0 {
+			for bucketName := range bucketsInverted {
+				if strings.HasSuffix(bucketName, "_searchable") && strings.HasPrefix(bucketName, "property_") {
+					propName := strings.TrimPrefix(strings.TrimSuffix(bucketName, "_searchable"), "property_")
+					skipDeltaForProps = append(skipDeltaForProps, propName)
+				}
+			}
+		}
+
+		delta := inverted.DeltaSkipSearchable(prevProps, props, skipDeltaForProps)
 		propsToAdd = delta.ToAdd
 		propsToDel = delta.ToDelete
 		deltaNil := inverted.DeltaNil(prevNilprops, nilprops)
@@ -537,8 +542,13 @@ func (s *Shard) updateInvertedIndexLSM(object *storobj.Object,
 						return fmt.Errorf("track dimensions of '%s' (delete): %w", vecName, err)
 					}
 				}
+				var dims int
 				for vecName, vec := range prevObject.MultiVectors {
-					if err := s.removeDimensionsForVecLSM(len(vec), status.oldDocID, vecName); err != nil {
+					dims = 0
+					for _, v := range vec {
+						dims += len(v)
+					}
+					if err := s.removeDimensionsForVecLSM(dims, status.oldDocID, vecName); err != nil {
 						return fmt.Errorf("track dimensions of '%s' (delete): %w", vecName, err)
 					}
 				}
@@ -551,22 +561,9 @@ func (s *Shard) updateInvertedIndexLSM(object *storobj.Object,
 	}
 
 	before := time.Now()
-
-	// This change is related to the patching/update behavior under new inverted index implementation
-	// https://github.com/weaviate/weaviate/pull/6176
-	// - on the old implementation, patching a document would result on only changing the entries for the terms that were changed
-	// - on the new implementation, patching a document will result on inserting all terms into the newer segment
-	// The goal is to enable searching through the segments independently of the previous segments.
-	if prevObject != nil && os.Getenv("USE_INVERTED_SEARCHABLE") == "true" {
-		if err := s.extendInvertedIndicesLSM(props, nilprops, status.docID); err != nil {
-			return fmt.Errorf("put inverted indices props: %w", err)
-		}
-	} else {
-		if err := s.extendInvertedIndicesLSM(propsToAdd, nilpropsToAdd, status.docID); err != nil {
-			return fmt.Errorf("put inverted indices props: %w", err)
-		}
+	if err := s.extendInvertedIndicesLSM(propsToAdd, nilpropsToAdd, status.docID); err != nil {
+		return fmt.Errorf("put inverted indices props: %w", err)
 	}
-
 	s.metrics.InvertedExtend(before, len(propsToAdd))
 
 	if s.index.Config.TrackVectorDimensions {
@@ -576,8 +573,13 @@ func (s *Shard) updateInvertedIndexLSM(object *storobj.Object,
 					return fmt.Errorf("track dimensions of '%s': %w", vecName, err)
 				}
 			}
+			var dims int
 			for vecName, vec := range object.MultiVectors {
-				if err := s.extendDimensionTrackerForVecLSM(len(vec), status.docID, vecName); err != nil {
+				dims = 0
+				for _, v := range vec {
+					dims += len(v)
+				}
+				if err := s.extendDimensionTrackerForVecLSM(dims, status.docID, vecName); err != nil {
 					return fmt.Errorf("track dimensions of '%s': %w", vecName, err)
 				}
 			}
